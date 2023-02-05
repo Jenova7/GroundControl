@@ -1,16 +1,12 @@
-import "./openapi/api";
 import "reflect-metadata";
-import { createConnection, getRepository } from "typeorm";
 import { SendQueue } from "./entity/SendQueue";
 import { GroundControlToMajorTom } from "./class/GroundControlToMajorTom";
 import { TokenConfiguration } from "./entity/TokenConfiguration";
 import { NOTIFICATION_LEVEL_NEWS, NOTIFICATION_LEVEL_PRICE, NOTIFICATION_LEVEL_TIPS, NOTIFICATION_LEVEL_TRANSACTIONS } from "./openapi/constants";
+import dataSource from "./data-source";
+import { components } from "./openapi/api";
 require("dotenv").config();
-const url = require("url");
-const parsed = url.parse(process.env.JAWSDB_MARIA_URL);
-const serverKey = process.env.FCM_SERVER_KEY;
-const apnsPem = process.env.APNS_PEM;
-if (!process.env.JAWSDB_MARIA_URL || !process.env.FCM_SERVER_KEY || !process.env.APNS_PEM) {
+if (!process.env.FCM_SERVER_KEY || !process.env.APNS_P8 || !process.env.APNS_TOPIC || !process.env.APPLE_TEAM_ID || !process.env.APNS_P8_KID) {
   console.error("not all env variables set");
   process.exit();
 }
@@ -25,35 +21,20 @@ process
     process.exit(1);
   });
 
-createConnection({
-  type: "mariadb",
-  host: parsed.hostname,
-  port: parsed.port,
-  username: parsed.auth.split(":")[0],
-  password: parsed.auth.split(":")[1],
-  database: parsed.path.replace("/", ""),
-  synchronize: true,
-  logging: false,
-  entities: ["src/entity/**/*.ts"],
-  migrations: ["src/migration/**/*.ts"],
-  subscribers: ["src/subscriber/**/*.ts"],
-  cli: {
-    entitiesDir: "src/entity",
-    migrationsDir: "src/migration",
-    subscribersDir: "src/subscriber",
-  },
-})
+dataSource
+  .initialize()
   .then(async (connection) => {
     // start worker
-    console.log("running");
+    console.log("running groundcontrol worker-sender");
+    console.log(require("fs").readFileSync("./bowie.txt").toString("ascii"));
 
-    const sendQueueRepository = getRepository(SendQueue);
-    const tokenConfigurationRepository = getRepository(TokenConfiguration);
+    const sendQueueRepository = dataSource.getRepository(SendQueue);
+    const tokenConfigurationRepository = dataSource.getRepository(TokenConfiguration);
 
     while (1) {
-      const record = await sendQueueRepository.findOne();
+      const [record] = await sendQueueRepository.find({ take: 1 });
       if (!record) {
-        await new Promise((resolve) => setTimeout(resolve, 7000));
+        await new Promise((resolve) => setTimeout(resolve, 1000, false));
         continue;
       }
       // TODO: we could atomically lock this record via mariadb's GET_LOCK and typeorm's raw query, and that would
@@ -61,10 +42,19 @@ createConnection({
       let payload;
       try {
         payload = JSON.parse(record.data);
-      } catch (_) {}
+      } catch (_) {
+        process.env.VERBOSE && console.warn("bad json in data:", record.data);
+        await sendQueueRepository.remove(record);
+        continue;
+      }
 
-      let tokenConfig = await tokenConfigurationRepository.findOne({ os: payload.os, token: payload.token });
+      let tokenConfig = await tokenConfigurationRepository.findOneBy({ os: payload.os, token: payload.token });
       if (!tokenConfig) {
+        if (!payload.os || !payload.token) {
+          process.env.VERBOSE && console.warn("no os or token in payload:", payload);
+          await sendQueueRepository.remove(record);
+          continue;
+        }
         tokenConfig = new TokenConfiguration();
         tokenConfig.os = payload.os;
         tokenConfig.token = payload.token;
@@ -95,34 +85,37 @@ createConnection({
       }
 
       const timeoutId = setTimeout(() => {
-        console.error('timeout pushing to token, comitting suicide');
+        console.error("timeout pushing to token, comitting suicide");
         process.exit(2);
       }, 21000);
       switch (payload.type) {
         case 2:
-          payload = <Components.Schemas.PushNotificationOnchainAddressGotPaid>payload;
+          payload = <components["schemas"]["PushNotificationOnchainAddressGotPaid"]>payload;
           process.env.VERBOSE && console.warn("pushing to token", payload.token, payload.os);
-          await GroundControlToMajorTom.pushOnchainAddressWasPaid(serverKey, apnsPem, payload);
+          await GroundControlToMajorTom.pushOnchainAddressWasPaid(connection, GroundControlToMajorTom.getGoogleServerKey(), GroundControlToMajorTom.getApnsJwtToken(), payload);
           await sendQueueRepository.remove(record);
           break;
         case 3:
-          payload = <Components.Schemas.PushNotificationOnchainAddressGotUnconfirmedTransaction>payload;
+          payload = <components["schemas"]["PushNotificationOnchainAddressGotUnconfirmedTransaction"]>payload;
           process.env.VERBOSE && console.warn("pushing to token", payload.token, payload.os);
-          await GroundControlToMajorTom.pushOnchainAddressGotUnconfirmedTransaction(serverKey, apnsPem, payload);
+          await GroundControlToMajorTom.pushOnchainAddressGotUnconfirmedTransaction(connection, GroundControlToMajorTom.getGoogleServerKey(), GroundControlToMajorTom.getApnsJwtToken(), payload);
           await sendQueueRepository.remove(record);
           break;
         case 1:
-          payload = <Components.Schemas.PushNotificationLightningInvoicePaid>payload;
+          payload = <components["schemas"]["PushNotificationLightningInvoicePaid"]>payload;
           process.env.VERBOSE && console.warn("pushing to token", payload.token, payload.os);
-          await GroundControlToMajorTom.pushLightningInvoicePaid(serverKey, apnsPem, payload);
+          await GroundControlToMajorTom.pushLightningInvoicePaid(connection, GroundControlToMajorTom.getGoogleServerKey(), GroundControlToMajorTom.getApnsJwtToken(), payload);
           await sendQueueRepository.remove(record);
           break;
         case 4:
-          payload = <Components.Schemas.PushNotificationTxidGotConfirmed>payload;
+          payload = <components["schemas"]["PushNotificationTxidGotConfirmed"]>payload;
           process.env.VERBOSE && console.warn("pushing to token", payload.token, payload.os);
-          await GroundControlToMajorTom.pushOnchainTxidGotConfirmed(serverKey, apnsPem, payload);
+          await GroundControlToMajorTom.pushOnchainTxidGotConfirmed(connection, GroundControlToMajorTom.getGoogleServerKey(), GroundControlToMajorTom.getApnsJwtToken(), payload);
           await sendQueueRepository.remove(record);
           break;
+        default:
+          process.env.VERBOSE && console.warn("malformed payload:", payload);
+          await sendQueueRepository.remove(record);
       }
       clearTimeout(timeoutId);
     }

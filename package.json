@@ -1,30 +1,34 @@
 {
   "name": "groundcontrol",
-  "version": "1.0.2",
+  "version": "2.1.2",
   "description": "GroundControl push server API",
   "devDependencies": {
+    "@types/node": "18.7.16",
+    "openapi-typescript": "^5.4.1",
     "prettier": "2.0.5"
   },
   "dependencies": {
-    "@types/node": "^14.14.33",
-    "body-parser": "^1.18.1",
+    "body-parser": "^1.20.1",
     "cors": "^2.8.5",
-    "dotenv": "^8.2.0",
-    "express": "^4.15.4",
-    "express-rate-limit": "^5.2.6",
+    "dotenv": "^16.0.2",
+    "express": "^4.17.3",
+    "express-rate-limit": "^6.6.0",
     "frisbee": "^3.1.4",
-    "jayson": "^3.3.4",
-    "mysql2": "^2.2.5",
+    "helmet": "^5.1.0",
+    "jayson": "^3.6.6",
+    "jsonwebtoken": "^8.5.1",
+    "mysql2": "^2.3.3",
     "reflect-metadata": "^0.1.10",
-    "ts-node": "3.3.0",
-    "typeorm": "0.2.32",
-    "typescript": "4.2.3"
+    "ts-node": "10.9.1",
+    "typeorm": "0.3.9",
+    "typescript": "4.8.3"
   },
   "scripts": {
-    "lint": "npx prettier --write .",
+    "lint": "npx prettier --write . && npx tsc",
     "start": "ts-node src/index.ts",
     "worker-blockprocessor": "ts-node src/worker-blockprocessor.ts",
     "worker-processmempool": "ts-node src/worker-processmempool.ts",
-    "worker-sender": "ts-node src/worker-sender.ts"
+    "worker-sender": "ts-node src/worker-sender.ts",
+    "openapi": "npx openapi-typescript openapi.yaml  --additional-properties true --export-type true  --output src/openapi/api.ts"
   }
 }

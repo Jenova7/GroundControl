@@ -1,14 +1,15 @@
-import "./openapi/api";
 import "reflect-metadata";
-import { createConnection, getRepository, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { TokenToAddress } from "./entity/TokenToAddress";
 import { SendQueue } from "./entity/SendQueue";
 import { KeyValue } from "./entity/KeyValue";
 import { TokenToTxid } from "./entity/TokenToTxid";
+import dataSource from "./data-source";
+import { components } from "./openapi/api";
 require("dotenv").config();
 const url = require("url");
-const parsed = url.parse(process.env.JAWSDB_MARIA_URL);
-if (!process.env.JAWSDB_MARIA_URL || !process.env.BITCOIN_RPC) {
+
+if (!process.env.BITCOIN_RPC) {
   console.error("not all env variables set");
   process.exit();
 }
@@ -34,7 +35,7 @@ async function processBlock(blockNum, sendQueueRepository: Repository<SendQueue>
   const responseGetblockhash = await client.request("getblockhash", [blockNum]);
   const responseGetblock = await client.request("getblock", [responseGetblockhash.result, 2]);
   const addresses: string[] = [];
-  const allPotentialPushPayloadsArray: Components.Schemas.PushNotificationOnchainAddressGotPaid[] = [];
+  const allPotentialPushPayloadsArray: components["schemas"]["PushNotificationOnchainAddressGotPaid"][] = [];
   const txids: string[] = [];
   for (const tx of responseGetblock.result.tx) {
     txids.push(tx.txid);
@@ -43,7 +44,7 @@ async function processBlock(blockNum, sendQueueRepository: Repository<SendQueue>
         if (output.scriptPubKey && output.scriptPubKey.addresses) {
           for (const address of output.scriptPubKey.addresses) {
             addresses.push(address);
-            const payload: Components.Schemas.PushNotificationOnchainAddressGotPaid = {
+            const payload: components["schemas"]["PushNotificationOnchainAddressGotPaid"] = {
               address,
               txid: tx.txid,
               sat: Math.floor(output.value * 100000000),
@@ -63,7 +64,7 @@ async function processBlock(blockNum, sendQueueRepository: Repository<SendQueue>
   // allPotentialPushPayloadsArray.push({ address: "bc1qaemfnglf928kd9ma2jzdypk333au6ctu7h7led", txid: "666", sat: 1488, type: 2, token: "", os: "ios" }); // debug fixme
   // addresses.push("bc1qaemfnglf928kd9ma2jzdypk333au6ctu7h7led"); // debug fixme
 
-  const query = getRepository(TokenToAddress).createQueryBuilder().where("address IN (:...address)", { address: addresses });
+  const query = dataSource.getRepository(TokenToAddress).createQueryBuilder().where("address IN (:...address)", { address: addresses });
 
   for (const t2a of await query.getMany()) {
     // found all addresses that we are tracking on behalf of our users. now,
@@ -86,9 +87,9 @@ async function processBlock(blockNum, sendQueueRepository: Repository<SendQueue>
   }
 
   // now, checking if there is a subscription to one of the mined txids:
-  const query2 = getRepository(TokenToTxid).createQueryBuilder().where("txid IN (:...txids)", { txids });
+  const query2 = dataSource.getRepository(TokenToTxid).createQueryBuilder().where("txid IN (:...txids)", { txids });
   for (const t2txid of await query2.getMany()) {
-    const payload: Components.Schemas.PushNotificationTxidGotConfirmed = {
+    const payload: components["schemas"]["PushNotificationTxidGotConfirmed"] = {
       txid: t2txid.txid,
       type: 4,
       level: "transactions",
@@ -104,33 +105,18 @@ async function processBlock(blockNum, sendQueueRepository: Repository<SendQueue>
   }
 }
 
-createConnection({
-  type: "mariadb",
-  host: parsed.hostname,
-  port: parsed.port,
-  username: parsed.auth.split(":")[0],
-  password: parsed.auth.split(":")[1],
-  database: parsed.path.replace("/", ""),
-  synchronize: true,
-  logging: false,
-  entities: ["src/entity/**/*.ts"],
-  migrations: ["src/migration/**/*.ts"],
-  subscribers: ["src/subscriber/**/*.ts"],
-  cli: {
-    entitiesDir: "src/entity",
-    migrationsDir: "src/migration",
-    subscribersDir: "src/subscriber",
-  },
-})
+dataSource
+  .initialize()
   .then(async (connection) => {
     // start worker
-    console.log("running");
+    console.log("running groundcontrol worker-blockprocessor");
+    console.log(require("fs").readFileSync("./bowie.txt").toString("ascii"));
 
-    const KeyValueRepository = getRepository(KeyValue);
-    const sendQueueRepository = getRepository(SendQueue);
+    const KeyValueRepository = dataSource.getRepository(KeyValue);
+    const sendQueueRepository = dataSource.getRepository(SendQueue);
 
     while (1) {
-      const keyVal = await KeyValueRepository.findOne({ key: LAST_PROCESSED_BLOCK });
+      const keyVal = await KeyValueRepository.findOneBy({ key: LAST_PROCESSED_BLOCK });
       if (!keyVal) {
         // if no info saved in database we assume we are all caught up and wait for the next block
         const responseGetblockcount = await client.request("getblockcount", []);
@@ -141,7 +127,7 @@ createConnection({
       const responseGetblockcount = await client.request("getblockcount", []);
 
       if (+responseGetblockcount.result <= +keyVal.value) {
-        await new Promise((resolve) => setTimeout(resolve, 60000));
+        await new Promise((resolve) => setTimeout(resolve, 60000, false));
         continue;
       }
 

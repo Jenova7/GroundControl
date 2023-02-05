@@ -1,8 +1,9 @@
-import "./openapi/api";
 import "reflect-metadata";
-import { createConnection, getRepository, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { TokenToAddress } from "./entity/TokenToAddress";
 import { SendQueue } from "./entity/SendQueue";
+import dataSource from "./data-source";
+import { components } from "./openapi/api";
 require("dotenv").config();
 const url = require("url");
 let jayson = require("jayson/promise");
@@ -10,8 +11,7 @@ let rpc = url.parse(process.env.BITCOIN_RPC);
 let client = jayson.client.http(rpc);
 
 let processedTxids = {};
-const parsed = url.parse(process.env.JAWSDB_MARIA_URL);
-if (!process.env.JAWSDB_MARIA_URL || !process.env.BITCOIN_RPC) {
+if (!process.env.BITCOIN_RPC) {
   console.error("not all env variables set");
   process.exit();
 }
@@ -34,7 +34,7 @@ async function processMempool() {
   process.env.VERBOSE && console.log(responseGetrawmempool.result.length, "txs in mempool");
 
   let addresses: string[] = [];
-  let allPotentialPushPayloadsArray: Components.Schemas.PushNotificationOnchainAddressGotUnconfirmedTransaction[] = [];
+  let allPotentialPushPayloadsArray: components["schemas"]["PushNotificationOnchainAddressGotUnconfirmedTransaction"][] = [];
 
   let rpcBatch = [];
   const batchSize = 100;
@@ -54,7 +54,7 @@ async function processMempool() {
               for (const address of output.scriptPubKey.addresses) {
                 addresses.push(address);
                 processedTxids[response.result.txid] = true;
-                const payload: Components.Schemas.PushNotificationOnchainAddressGotUnconfirmedTransaction = {
+                const payload: components["schemas"]["PushNotificationOnchainAddressGotUnconfirmedTransaction"] = {
                   address,
                   txid: response.result.txid,
                   sat: Math.floor(output.value * 100000000),
@@ -78,7 +78,7 @@ async function processMempool() {
       }
 
       // fetching found addresses from db:
-      const query = getRepository(TokenToAddress).createQueryBuilder().where("address IN (:...address)", { address: addresses });
+      const query = dataSource.getRepository(TokenToAddress).createQueryBuilder().where("address IN (:...address)", { address: addresses });
       for (const t2a of await query.getMany()) {
         // found all addresses that we are tracking on behalf of our users. now,
         // iterating all addresses in a block to see if there is a match.
@@ -111,29 +111,14 @@ async function processMempool() {
   }
 }
 
-createConnection({
-  type: "mariadb",
-  host: parsed.hostname,
-  port: parsed.port,
-  username: parsed.auth.split(":")[0],
-  password: parsed.auth.split(":")[1],
-  database: parsed.path.replace("/", ""),
-  synchronize: true,
-  logging: false,
-  entities: ["src/entity/**/*.ts"],
-  migrations: ["src/migration/**/*.ts"],
-  subscribers: ["src/subscriber/**/*.ts"],
-  cli: {
-    entitiesDir: "src/entity",
-    migrationsDir: "src/migration",
-    subscribersDir: "src/subscriber",
-  },
-})
+dataSource
+  .initialize()
   .then(async (connection) => {
     // start worker
-    console.log("running");
+    console.log("running groundcontrol worker-processmempool");
+    console.log(require("fs").readFileSync("./bowie.txt").toString("ascii"));
 
-    sendQueueRepository = getRepository(SendQueue);
+    sendQueueRepository = dataSource.getRepository(SendQueue);
 
     while (1) {
       const start = +new Date();
@@ -145,7 +130,7 @@ createConnection({
       const end = +new Date();
       process.env.VERBOSE && console.log("processing mempool took", (end - start) / 1000, "sec");
       process.env.VERBOSE && console.log("-----------------------");
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((resolve) => setTimeout(resolve, 3000, false));
     }
   })
   .catch((error) => {
